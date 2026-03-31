@@ -33,13 +33,11 @@ export const useCamera = (config: CameraConfig = {}) => {
   const streamRef = useRef<MediaStream | null>(null);
   const isMountedRef = useRef(true);
 
-  // Check browser support
   useEffect(() => {
     const supported = !!navigator.mediaDevices?.getUserMedia;
     setIsSupported(supported);
   }, []);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
@@ -47,17 +45,24 @@ export const useCamera = (config: CameraConfig = {}) => {
     };
   }, []);
 
+  const ensureNativePermissions = useCallback(async () => {
+    const cap = (window as any).Capacitor;
+    if (!cap?.isNativePlatform?.()) return true;
+    const camera = cap?.Plugins?.Camera;
+    if (!camera) return true;
+    const status = await camera.checkPermissions();
+    if (status.camera === "granted") return true;
+    const requested = await camera.requestPermissions({ permissions: ["camera"] });
+    return requested.camera === "granted";
+  }, []);
+
   const cleanup = useCallback(() => {
     if (streamRef.current) {
-      for (const track of streamRef.current.getTracks()) {
-        track.stop();
-      }
+      for (const track of streamRef.current.getTracks()) track.stop();
       streamRef.current = null;
     }
 
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
+    if (videoRef.current) videoRef.current.srcObject = null;
 
     setIsActive(false);
   }, []);
@@ -65,6 +70,11 @@ export const useCamera = (config: CameraConfig = {}) => {
   const createMediaStream = useCallback(
     async (facing: "user" | "environment") => {
       try {
+        const hasPermission = await ensureNativePermissions();
+        if (!hasPermission) {
+          throw { type: "permission", message: "Camera permission denied" };
+        }
+
         const constraints = {
           video: {
             facingMode: facing,
@@ -76,14 +86,14 @@ export const useCamera = (config: CameraConfig = {}) => {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
         if (!isMountedRef.current) {
-          for (const track of stream.getTracks()) {
-            track.stop();
-          }
+          for (const track of stream.getTracks()) track.stop();
           return null;
         }
 
         return stream;
       } catch (err: any) {
+        if (err.type && err.message) throw err;
+
         let errorType: CameraError["type"] = "unknown";
         let errorMessage = "Failed to access camera";
 
@@ -101,7 +111,7 @@ export const useCamera = (config: CameraConfig = {}) => {
         throw { type: errorType, message: errorMessage };
       }
     },
-    [width, height],
+    [ensureNativePermissions, width, height],
   );
 
   const setupVideo = useCallback(async (stream: MediaStream) => {
@@ -114,13 +124,7 @@ export const useCamera = (config: CameraConfig = {}) => {
       const onLoadedMetadata = () => {
         video.removeEventListener("loadedmetadata", onLoadedMetadata);
         video.removeEventListener("error", onError);
-
-        // Try to play the video
-        video.play().catch((err) => {
-          console.warn("Video autoplay failed:", err);
-          // This is often okay - user interaction might be needed
-        });
-
+        video.play().catch(() => undefined);
         resolve(true);
       };
 
@@ -133,25 +137,18 @@ export const useCamera = (config: CameraConfig = {}) => {
       video.addEventListener("loadedmetadata", onLoadedMetadata);
       video.addEventListener("error", onError);
 
-      // Handle case where metadata is already loaded
-      if (video.readyState >= 1) {
-        onLoadedMetadata();
-      }
+      if (video.readyState >= 1) onLoadedMetadata();
     });
   }, []);
 
   const startCamera = useCallback(async (): Promise<boolean> => {
-    if (isSupported === false || isLoading) {
-      return false;
-    }
+    if (isSupported === false || isLoading) return false;
 
     setIsLoading(true);
     setError(null);
 
     try {
-      // Clean up any existing stream
       cleanup();
-
       const stream = await createMediaStream(currentFacingMode);
       if (!stream) return false;
 
@@ -166,25 +163,13 @@ export const useCamera = (config: CameraConfig = {}) => {
       cleanup();
       return false;
     } catch (err: any) {
-      if (isMountedRef.current) {
-        setError(err);
-      }
-
+      if (isMountedRef.current) setError(err);
       cleanup();
       return false;
     } finally {
-      if (isMountedRef.current) {
-        setIsLoading(false);
-      }
+      if (isMountedRef.current) setIsLoading(false);
     }
-  }, [
-    isSupported,
-    isLoading,
-    currentFacingMode,
-    cleanup,
-    createMediaStream,
-    setupVideo,
-  ]);
+  }, [isSupported, isLoading, currentFacingMode, cleanup, createMediaStream, setupVideo]);
 
   const stopCamera = useCallback(async (): Promise<void> => {
     if (isLoading) return;
@@ -192,20 +177,14 @@ export const useCamera = (config: CameraConfig = {}) => {
     setIsLoading(true);
     cleanup();
     setError(null);
-
-    // Small delay to ensure cleanup is complete
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    if (isMountedRef.current) {
-      setIsLoading(false);
-    }
+    if (isMountedRef.current) setIsLoading(false);
   }, [isLoading, cleanup]);
 
   const switchCamera = useCallback(
     async (newFacingMode?: "user" | "environment"): Promise<boolean> => {
-      if (isSupported === false || isLoading) {
-        return false;
-      }
+      if (isSupported === false || isLoading) return false;
 
       const targetFacingMode =
         newFacingMode ||
@@ -215,13 +194,8 @@ export const useCamera = (config: CameraConfig = {}) => {
       setError(null);
 
       try {
-        // Clean up current stream
         cleanup();
-
-        // Update facing mode
         setCurrentFacingMode(targetFacingMode);
-
-        // Small delay to ensure cleanup
         await new Promise((resolve) => setTimeout(resolve, 100));
 
         const stream = await createMediaStream(targetFacingMode);
@@ -238,16 +212,12 @@ export const useCamera = (config: CameraConfig = {}) => {
         cleanup();
         return false;
       } catch (err: any) {
-        if (isMountedRef.current) {
-          setError(err);
-        }
+        if (isMountedRef.current) setError(err);
 
         cleanup();
         return false;
       } finally {
-        if (isMountedRef.current) {
-          setIsLoading(false);
-        }
+        if (isMountedRef.current) setIsLoading(false);
       }
     },
     [
@@ -278,8 +248,6 @@ export const useCamera = (config: CameraConfig = {}) => {
 
       const video = videoRef.current;
       const canvas = canvasRef.current;
-
-      // Set canvas size to match video
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
 
@@ -289,7 +257,6 @@ export const useCamera = (config: CameraConfig = {}) => {
         return;
       }
 
-      // Mirror front camera image
       if (currentFacingMode === "user") {
         ctx.scale(-1, 1);
         ctx.drawImage(video, -canvas.width, 0);
@@ -316,22 +283,17 @@ export const useCamera = (config: CameraConfig = {}) => {
   }, [isActive, format, quality, currentFacingMode]);
 
   return {
-    // State
     isActive,
     isSupported,
     error,
     isLoading,
     currentFacingMode,
-
-    // Actions
-    startCamera,
-    stopCamera,
-    capturePhoto,
-    switchCamera,
-    retry,
-
-    // Refs for components
     videoRef,
     canvasRef,
+    startCamera,
+    stopCamera,
+    switchCamera,
+    retry,
+    capturePhoto,
   };
 };
