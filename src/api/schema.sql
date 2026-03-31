@@ -1,0 +1,26 @@
+CREATE TABLE IF NOT EXISTS customers (
+  id BIGINT PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  mobile VARCHAR(40) NOT NULL,
+  created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS products (
+  id BIGINT PRIMARY KEY,
+  name VARCHAR(150) NOT NULL,
+  barcode VARCHAR(100) NOT NULL UNIQUE,
+  price DECIMAL(12,2) NOT NULL,
+  created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS transactions (
+  id BIGINT PRIMARY KEY,
+  customer_id BIGINT NOT NULL,
+  product_name VARCHAR(150) NOT NULL,
+  note TEXT,
+  amount DECIMAL(12,2) NOT NULL,
+  tx_type VARCHAR(20) NOT NULL,
+  items_json LONGTEXT,
+  timestamp BIGINT NOT NULL,
+  FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+);
